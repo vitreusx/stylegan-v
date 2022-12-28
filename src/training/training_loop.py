@@ -5,6 +5,7 @@
 # and any modifications thereto.  Any use, reproduction, disclosure or
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
+import wandb #WANDB
 
 import os
 import time
@@ -28,7 +29,7 @@ from src.torch_utils.ops import grid_sample_gradfix
 import src.legacy
 from src.metrics import metric_main
 from src.training.layers import sample_frames
-from src.training.logging import generate_videos, save_video_frames_as_mp4
+from src.training.logging2 import generate_videos, save_video_frames_as_mp4
 
 #----------------------------------------------------------------------------
 
@@ -142,7 +143,11 @@ def training_loop(
     torch.backends.cudnn.allow_tf32 = allow_tf32        # Allow PyTorch to internally use tf32 for convolutions
     conv2d_gradfix.enabled = True                       # Improves training speed.
     grid_sample_gradfix.enabled = True                  # Avoids errors with the augmentation pipe.
-
+    
+    os.environ["WANDB_RUN_GROUP"] = "experiment-" + wandb.util.generate_id()#WANDB
+    if rank == 0:#WANDB
+        print('Initializing wandb logger...')#WANDB
+        wandb.init(project="test-project", entity="video_uw2022")#WANDB
     # Load training set.
     if rank == 0:
         print('Loading training set...')
@@ -150,19 +155,25 @@ def training_loop(
     training_set_sampler = misc.InfiniteSampler(dataset=training_set, rank=rank, num_replicas=num_gpus, seed=random_seed)
     training_set_iterator = iter(torch.utils.data.DataLoader(dataset=training_set, sampler=training_set_sampler, batch_size=batch_size//num_gpus, **data_loader_kwargs))
     if rank == 0:
-        print()
         print('Num videos: ', len(training_set))
         print('Image shape:', training_set.image_shape)
         print('Label shape:', training_set.label_shape)
-        print()
 
     # Construct networks.
     if rank == 0:
         print('Constructing networks...')
     common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels)
+    print('executing common kwargs')
+    print(common_kwargs)
+    print(G_kwargs)
     G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+    print(G)
+    print('Finished exectuing G')
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+    print(D)
+    print('Finished executing D')
     G_ema = copy.deepcopy(G).eval()
+    print('Finished executing G_ema')
 
     # Resume from existing pickle.
     if (resume_pkl is not None):
@@ -183,11 +194,22 @@ def training_loop(
     tick_start_nimg = cur_nimg
 
     # Print network summary tables.
+    print(f'resume_whole_state {resume_whole_state}')
     if rank == 0 and not resume_whole_state:
+        print('Networks summary:')
+        print(f' batch_gpu: {batch_gpu}')
+        print(f' G.z_dim: {G.z_dim}')
         z = torch.empty([batch_gpu, G.z_dim], device=device) # [bf, z_dim]
+        print('z', z.shape)
+        print(f' G.c_dim: {G.c_dim}')
         c = torch.empty([batch_gpu, G.c_dim], device=device) # [b, c_dim]
+        print('c', c.shape)
+        print(f'cfg.sampling.num_frames_per_video: {cfg.sampling.num_frames_per_video}')
         t = torch.zeros([batch_gpu, cfg.sampling.num_frames_per_video], device=device).long() # [b, f]
+        print('t', t.shape)
+        print('printing module summary for G')
         img = misc.print_module_summary(G, [z, c, t]) # [bf, c, h, w]
+        print('printing module summary for D')
         misc.print_module_summary(D, [img, c, t])
 
     # Setup augmentation.
@@ -276,11 +298,18 @@ def training_loop(
             print('Exporting sample images...')
             vis.grid_size, images, vis.labels, vis.frames_idx = setup_snapshot_image_grid(training_set=training_set)
             save_image_grid(images[:, 0], os.path.join(run_dir, 'reals.jpg'), drange=[0,255], grid_size=vis.grid_size)
+            print('Saved real imgs!')
             vis.grid_z = torch.randn([vis.labels.shape[0], G.z_dim], device=device).split(batch_gpu) # (num_batches, [batch_size, z_dim])
+            print('Generated z!')
             vis.grid_c = torch.from_numpy(vis.labels).to(device).split(batch_gpu) # (num_batches, [batch_size, c_dim])
+            print('Generated c!')
             vis.grid_t = torch.from_numpy(vis.frames_idx).to(device).split(batch_gpu) # (num_batches, [batch_size, num_frames])
+            print('Generated t!')
+            #print(G_ema(z=z, c=c, t=t[:, [0]], noise_mode='const'))
             images = torch.cat([G_ema(z=z, c=c, t=t[:, [0]], noise_mode='const').cpu() for z, c, t in zip(vis.grid_z, vis.grid_c, vis.grid_t)]).numpy()
+            print('Generated images!')
             save_image_grid(images, os.path.join(run_dir, 'fakes_init.jpg'), drange=[-1,1], grid_size=vis.grid_size)
+            print('Saved fake imgs!')
 
             # Generating data for videos
             assert len(vis.labels) >= vis.num_videos
@@ -318,7 +347,6 @@ def training_loop(
     # Train.
     if rank == 0:
         print(f'Training for {total_kimg} kimg...')
-        print()
     tick_start_time = time.time()
     maintenance_time = tick_start_time - start_time
     if progress_fn is not None:
@@ -331,6 +359,7 @@ def training_loop(
         # Fetch training data.
         with torch.autograd.profiler.record_function('data_fetch'):
             batch = next(training_set_iterator)
+            print('---------------------Next batch!-----------------------')
             phase_real_img, phase_real_c, phase_real_t, phase_real_l = batch['image'], batch['label'], batch['times'], batch['video_len']
             phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
             phase_real_c = phase_real_c.to(device).split(batch_gpu) # [batch_gpu, batch_size, c_dim]
@@ -505,6 +534,7 @@ def training_loop(
             if rank == 0:
                 print(f'Evaluating metrics for {experiment_name} ...')
             for metric in metrics:
+                print(metric)
                 result_dict = metric_main.calc_metric(
                     metric=metric,
                     G=snapshot_data['G_ema'],
@@ -518,6 +548,7 @@ def training_loop(
         del snapshot_data # conserve memory
 
         # Collect statistics.
+        print('Collecting stistics...')
         for phase in phases:
             value = []
             if (phase.start_event is not None) and (phase.end_event is not None) and phase.start_event_recorded and phase.end_event_recorded:
@@ -542,7 +573,9 @@ def training_loop(
             stats_tfevents.flush()
         if progress_fn is not None:
             progress_fn(cur_nimg // 1000, total_kimg)
-
+        if rank == 0:
+            wandb.log(stats_metrics)#WANDB
+            wandb.log(stats_dict)#WANDB
         # Update state.
         cur_tick += 1
         tick_start_nimg = cur_nimg
@@ -553,7 +586,6 @@ def training_loop(
 
     # Done.
     if rank == 0:
-        print()
         print('Exiting...')
 
 #----------------------------------------------------------------------------
