@@ -21,6 +21,7 @@ module load \
 
 # Run training
 CC=gcc CXX=g++ \
+WANDB_PROJECT=wandb-test-jakub \
 python3 src/infra/launch.py \
   hydra.run.dir=. \
   exp_suffix=ffs_256_wandb \

@@ -1,0 +1,4 @@
+[default]
+entity = video_uw2022
+base_url = https://api.wandb.ai
+
