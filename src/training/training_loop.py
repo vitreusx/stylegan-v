@@ -29,7 +29,7 @@ from src.torch_utils.ops import grid_sample_gradfix
 import src.legacy
 from src.metrics import metric_main
 from src.training.layers import sample_frames
-from src.training.logging2 import generate_videos, save_video_frames_as_mp4
+from src.training.logging import generate_videos, save_video_frames_as_mp4
 
 #----------------------------------------------------------------------------
 
