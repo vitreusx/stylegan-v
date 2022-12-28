@@ -30,6 +30,6 @@ python3 src/infra/launch.py \
   dataset.resolution=256 \
   +overwrite=true \
   +training.resume=latest \
-  +training.kimg=2500 \
-  +training.snap=100 \
+  training.kimg=2500 \
+  training.snap=100 \
   num_gpus=4
