@@ -359,7 +359,7 @@ def training_loop(
         # Fetch training data.
         with torch.autograd.profiler.record_function('data_fetch'):
             batch = next(training_set_iterator)
-            print('---------------------Next batch!-----------------------')
+            # print('---------------------Next batch!-----------------------')
             phase_real_img, phase_real_c, phase_real_t, phase_real_l = batch['image'], batch['label'], batch['times'], batch['video_len']
             phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
             phase_real_c = phase_real_c.to(device).split(batch_gpu) # [batch_gpu, batch_size, c_dim]
@@ -548,7 +548,7 @@ def training_loop(
         del snapshot_data # conserve memory
 
         # Collect statistics.
-        print('Collecting stistics...')
+        # print('Collecting stistics...')
         for phase in phases:
             value = []
             if (phase.start_event is not None) and (phase.end_event is not None) and phase.start_event_recorded and phase.end_event_recorded:
