@@ -147,7 +147,7 @@ def training_loop(
     os.environ["WANDB_RUN_GROUP"] = "experiment-" + wandb.util.generate_id()#WANDB
     if rank == 0:#WANDB
         print('Initializing wandb logger...')#WANDB
-        wandb.init(project="test-project", entity="video_uw2022")#WANDB
+        wandb.init()#WANDB
     # Load training set.
     if rank == 0:
         print('Loading training set...')
