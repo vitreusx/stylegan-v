@@ -25,6 +25,7 @@ from src.torch_utils import misc
 from src.torch_utils import training_stats
 from src.torch_utils.ops import conv2d_gradfix
 from src.torch_utils.ops import grid_sample_gradfix
+import logging
 
 import src.legacy
 from src.metrics import metric_main
@@ -143,6 +144,10 @@ def training_loop(
     torch.backends.cudnn.allow_tf32 = allow_tf32        # Allow PyTorch to internally use tf32 for convolutions
     conv2d_gradfix.enabled = True                       # Improves training speed.
     grid_sample_gradfix.enabled = True                  # Avoids errors with the augmentation pipe.
+
+    if rank != 0:
+        global print
+        print = lambda *args, **kwargs: None
     
     os.environ["WANDB_RUN_GROUP"] = "experiment-" + wandb.util.generate_id()#WANDB
     if rank == 0:#WANDB

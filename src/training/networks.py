@@ -10,6 +10,8 @@ import numpy as np
 import torch
 from torch import Tensor
 from omegaconf import OmegaConf
+import logging
+from typing import Optional
 
 from src.torch_utils import misc
 from src.torch_utils import persistence
@@ -88,6 +90,46 @@ def modulated_conv2d(
 #----------------------------------------------------------------------------
 
 @persistence.persistent_class
+class TemporalShiftModule(torch.nn.Module):
+    def __init__(self,
+        past_channels: Optional[int] = None,    # Number of channels to take from previous frame
+        future_channels: Optional[int] = None,  # Number of channels to take from a future frame
+    ):
+        super().__init__()
+        self.past_channels = past_channels
+        self.future_channels = future_channels
+    
+    def forward(self, x: torch.Tensor, num_frames: int) -> torch.Tensor:
+        """Process input tensor with TSM.
+        :param x: Tensor of shape (N*T, ...) where N is the batch size and T is the number of frames.
+        :return x: Processed `x`.
+        """
+        
+        orig_shape = x.shape
+        batch_size = len(x) // num_frames
+        x = x.view(batch_size, num_frames, *x.shape[1:])
+
+        num_channels = x.shape[2]
+
+        past = self.past_channels
+        if past is None:
+            past = num_channels // 8
+        
+        fut = self.future_channels
+        if fut is None:
+            fut = num_channels // 8
+
+        y = torch.zeros_like(x)
+        y[:, 1:, :past] = x[:, :-1, :past]
+        y[:, :, past:-fut] = x[:, :, past:-fut]
+        y[:, :-1, -fut:] = x[:, 1:, -fut:]
+        y = y.view(orig_shape)
+
+        return y
+
+#----------------------------------------------------------------------------
+
+@persistence.persistent_class
 class SynthesisLayer(torch.nn.Module):
     def __init__(self,
         in_channels,                    # Number of input channels.
@@ -121,7 +163,9 @@ class SynthesisLayer(torch.nn.Module):
             self.noise_strength = torch.nn.Parameter(torch.zeros([]))
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
 
-    def forward(self, x, w, noise_mode='random', fused_modconv=True, gain=1):
+        self.tsm = TemporalShiftModule()
+
+    def forward(self, x, w, num_frames, noise_mode='random', fused_modconv=True, gain=1):
         assert noise_mode in ['random', 'const', 'none']
         in_resolution = self.resolution // self.up
         misc.assert_shape(x, [None, self.weight.shape[1], in_resolution, in_resolution])
@@ -134,6 +178,7 @@ class SynthesisLayer(torch.nn.Module):
             noise = self.noise_const * self.noise_strength
 
         flip_weight = (self.up == 1) # slightly faster
+        x = self.tsm(x, num_frames)
         x = modulated_conv2d(x=x, weight=self.weight, styles=styles, noise=noise, up=self.up,
             padding=self.padding, resample_filter=self.resample_filter, flip_weight=flip_weight,
             fused_modconv=fused_modconv)
@@ -202,14 +247,32 @@ class SynthesisBlock(torch.nn.Module):
             self.input = GenInput(self.cfg, out_channels, motion_v_dim=motion_v_dim)
             conv1_in_channels = self.input.total_dim
         else:
-            self.conv0 = SynthesisLayer(in_channels, out_channels, w_dim=w_dim, resolution=self.resolution, up=2,
-                resample_filter=resample_filter, conv_clamp=conv_clamp, channels_last=self.channels_last,
-                kernel_size=3, cfg=cfg, **layer_kwargs)
+            self.conv0 = SynthesisLayer(
+                in_channels,
+                out_channels,
+                w_dim=w_dim,
+                resolution=self.resolution,
+                up=2,
+                resample_filter=resample_filter,
+                conv_clamp=conv_clamp,
+                channels_last=self.channels_last,
+                kernel_size=3,
+                cfg=cfg,
+                **layer_kwargs)
             self.num_conv += 1
             conv1_in_channels = out_channels
 
-        self.conv1 = SynthesisLayer(conv1_in_channels, out_channels, w_dim=w_dim, resolution=self.resolution,
-            conv_clamp=conv_clamp, channels_last=self.channels_last, kernel_size=3, cfg=cfg, **layer_kwargs)
+        self.conv1 = SynthesisLayer(
+            conv1_in_channels,
+            out_channels,
+            w_dim=w_dim,
+            resolution=self.resolution,
+            conv_clamp=conv_clamp,
+            channels_last=self.channels_last,
+            kernel_size=3,
+            cfg=cfg,
+            **layer_kwargs)
+            
         self.num_conv += 1
 
         if is_last or architecture == 'skip':
@@ -221,7 +284,7 @@ class SynthesisBlock(torch.nn.Module):
             self.skip = Conv2dLayer(in_channels, out_channels, kernel_size=1, bias=False, up=2,
                 resample_filter=resample_filter, channels_last=self.channels_last)
 
-    def forward(self, x, img, ws, motion_v=None, force_fp32=False, fused_modconv=None, **layer_kwargs):
+    def forward(self, x, img, ws, num_frames, motion_v=None, force_fp32=False, fused_modconv=None, **layer_kwargs):
         misc.assert_shape(ws, [None, self.num_conv + self.num_torgb, self.w_dim])
         w_iter = iter(ws.unbind(dim=1))
         dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
@@ -240,16 +303,16 @@ class SynthesisBlock(torch.nn.Module):
 
         # Main layers.
         if self.in_channels == 0:
-            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv1(x, next(w_iter), num_frames, fused_modconv=fused_modconv, **layer_kwargs)
         elif self.architecture == 'resnet':
             y = self.skip(x, gain=np.sqrt(0.5))
-            x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
-            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
+            x = self.conv0(x, next(w_iter), num_frames, fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv1(x, next(w_iter), num_frames, fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
             x = y.add_(x)
         else:
             conv0_w = next(w_iter)
-            x = self.conv0(x, conv0_w, fused_modconv=fused_modconv, **layer_kwargs)
-            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv0(x, conv0_w, num_frames, fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv1(x, next(w_iter), num_frames, fused_modconv=fused_modconv, **layer_kwargs)
 
         # ToRGB.
         if img is not None:
@@ -266,6 +329,7 @@ class SynthesisBlock(torch.nn.Module):
         return x, img
 
 #----------------------------------------------------------------------------
+
 
 @persistence.persistent_class
 class SynthesisNetwork(torch.nn.Module):
@@ -332,9 +396,20 @@ class SynthesisNetwork(torch.nn.Module):
             ws = ws.repeat_interleave(t.shape[1], dim=0) # [batch_size * num_frames, num_ws, w_dim]
             motion_v = None
         else:
+            # logging.debug(f"motion_v = {motion_v}")
             if motion_v is None:
                 motion_info = self.motion_encoder(c, t, motion_z=motion_z) # [batch_size * num_frames, motion_v_dim]
                 motion_v = motion_info['motion_v'] # [batch_size * num_frames, motion_v_dim]
+            
+            # logging.debug(f"motion_v.shape = {motion_v.shape}")
+            # logging.debug(f"motion_v = {motion_v}")
+            # logging.debug(f"motion_v[:6] = {motion_v[:6]}")
+            # logging.debug(f"t = {t}")
+            # logging.debug(f"t.shape = {t.shape}")
+            # logging.debug(f"c = {c}")
+            # logging.debug(f"motion_z = {motion_z}")
+            # logging.debug(f"ws = {ws}")
+            # logging.debug(f"ws.shape = {ws.shape}")
 
             if self.cfg.time_enc.cond_type in ['concat_w', 'sum_w']:
                 misc.assert_shape(motion_v, [t.shape[0] * t.shape[1], self.motion_v_dim])
@@ -357,11 +432,14 @@ class SynthesisNetwork(torch.nn.Module):
                 w_idx += block.num_conv
 
         x = img = None
+        num_frames = t.shape[1]
         for res, cur_ws in zip(self.block_resolutions, block_ws):
             block = getattr(self, f'b{res}')
             if self.cfg.time_enc.cond_type != 'concat_const':
                 motion_v = None # To make sure that we do not leak.
-            x, img = block(x, img, cur_ws, motion_v=motion_v, **block_kwargs)
+            x, img = block(x, img, cur_ws, num_frames, motion_v=motion_v, **block_kwargs)
+            # logging.debug(f"x.shape = {x.shape}")
+            # logging.debug(f"img.shape = {img.shape}")
 
         return img
 

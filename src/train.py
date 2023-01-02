@@ -19,12 +19,15 @@ import tempfile
 import torch
 import gc
 from omegaconf import OmegaConf, DictConfig
+import logging
 
 from src import dnnlib
 from training import training_loop
 from metrics import metric_main
 from src.torch_utils import training_stats
 from src.torch_utils import custom_ops
+
+# logging.basicConfig(level=logging.INFO)
 
 #----------------------------------------------------------------------------
 
