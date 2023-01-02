@@ -1,0 +1,8 @@
+srun \
+  --nodes=1 \
+  --ntasks=1 \
+  --cpus-per-task=8 \
+  --time=1:00:00 \
+  --gres=gpu:volta:4 \
+  --constraint=volta32G \
+  --pty /bin/bash -l
