@@ -372,7 +372,7 @@ def training_loop(
             all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device)
             all_gen_c = [phase_gen_c.split(batch_gpu) for phase_gen_c in all_gen_c.split(batch_size)]
             all_gen_l = [min(training_set.get_video_len(i), G.sampling_dict['max_num_frames']) for i in gen_cond_sample_idx]
-            all_gen_t = [sample_frames(G.sampling_dict, use_fractional_t=use_fractional_t_for_G, total_video_len=l, cur_nimg=cur_nimg) for l in all_gen_l]
+            all_gen_t = [sample_frames(G.sampling_dict, use_fractional_t=use_fractional_t_for_G, total_video_len=l, cur_nimg=cur_nimg, total_nimg=total_kimg * 1000) for l in all_gen_l]
             all_gen_t = torch.from_numpy(np.stack(all_gen_t)).pin_memory().to(device)
             all_gen_t = [phase_gen_t.split(batch_gpu) for phase_gen_t in all_gen_t.split(batch_size)]
 

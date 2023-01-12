@@ -384,11 +384,11 @@ def sample_frames(cfg: Dict, total_video_len: int, **kwargs) -> np.ndarray:
 
 #----------------------------------------------------------------------------
 
-def random_frame_sampling(cfg: Dict, total_video_len: int, use_fractional_t: bool=False, cur_nimg: int=0) -> np.ndarray:
+def random_frame_sampling(cfg: Dict, total_video_len: int, use_fractional_t: bool=False, cur_nimg: int = 0, total_nimg: int = 0) -> np.ndarray:
     const_max_dist = cfg.get("max_dist", float("inf"))
     max_dist_start = cfg.get("max_dist_start", const_max_dist)
-    max_dist_scale = cfg.get("max_dist_scale", 0.0)
-    max_dist = max_dist_start + max_dist_scale * cur_nimg
+    max_dist_scale = cfg.get("max_dist_end", const_max_dist)
+    max_dist = max_dist_start + (max_dist_end - max_dist_start) * (cur_nimg / total_nimg)
 
     min_time_diff = cfg["num_frames_per_video"] - 1
     max_time_diff = int(min(total_video_len - 1, max_dist))
@@ -417,7 +417,7 @@ def random_frame_sampling(cfg: Dict, total_video_len: int, use_fractional_t: boo
 
 #----------------------------------------------------------------------------
 
-def uniform_frame_sampling(cfg: Dict, total_video_len: int, use_fractional_t: bool=False, cur_nimg: int = 0) -> np.ndarray:
+def uniform_frame_sampling(cfg: Dict, total_video_len: int, use_fractional_t: bool=False, cur_nimg: int = 0, total_nimg: int = 0) -> np.ndarray:
     # Step 1: Select the distance between frames
     if type(cfg.get('dists_between_frames')) in (list, tuple):
         valid_dists = [d for d in cfg['dists_between_frames'] if d <= ['max_dist_between_frames']]
@@ -426,8 +426,8 @@ def uniform_frame_sampling(cfg: Dict, total_video_len: int, use_fractional_t: bo
     else:
         const_max_dist = cfg.get("max_dist", float("inf"))
         max_dist_start = cfg.get("max_dist_start", const_max_dist)
-        max_dist_scale = cfg.get("max_dist_scale", 0.0)
-        max_dist = max_dist_start + max_dist_scale * cur_nimg
+        max_dist_scale = cfg.get("max_dist_end", const_max_dist)
+        max_dist = max_dist_start + (max_dist_end - max_dist_start) * (cur_nimg / total_nimg)
         max_dist = min(max_dist, total_video_len // cfg['num_frames_per_video'])
         d = random.randint(1, int(max_dist))
 
