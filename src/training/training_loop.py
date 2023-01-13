@@ -193,6 +193,8 @@ def training_loop(
     batch_idx = 0 if not resume_whole_state else resume_data['stats']['batch_idx']
     tick_start_nimg = cur_nimg
 
+    training_set.update_nimg(cur_nimg=cur_nimg, total_nimg=total_kimg * 1000)
+
     # Print network summary tables.
     print(f'resume_whole_state {resume_whole_state}')
     if rank == 0 and not resume_whole_state:
@@ -431,6 +433,7 @@ def training_loop(
         # Update state.
         cur_nimg += batch_size * cfg.sampling.num_frames_per_video
         batch_idx += 1
+        training_set.update_nimg(cur_nimg=cur_nimg, total_nimg=total_kimg * 1000)
 
         # Execute ADA heuristic.
         if (ada_stats is not None) and (batch_idx % ada_interval == 0):

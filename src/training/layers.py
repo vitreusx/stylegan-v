@@ -387,16 +387,15 @@ def sample_frames(cfg: Dict, total_video_len: int, **kwargs) -> np.ndarray:
 def random_frame_sampling(cfg: Dict, total_video_len: int, use_fractional_t: bool=False, cur_nimg: int = 0, total_nimg: int = 0) -> np.ndarray:
     const_max_dist = cfg.get("max_dist", float("inf"))
     max_dist_start = cfg.get("max_dist_start", const_max_dist)
-    max_dist_scale = cfg.get("max_dist_end", const_max_dist)
+    max_dist_end = cfg.get("max_dist_end", const_max_dist)
     max_dist = max_dist_start + (max_dist_end - max_dist_start) * (cur_nimg / total_nimg)
+    breakpoint()
 
     min_time_diff = cfg["num_frames_per_video"] - 1
     max_time_diff = int(min(total_video_len - 1, max_dist))
+    max_time_diff = max(min_time_diff, max_time_diff)
 
-    if type(cfg.get('total_dists')) in (list, tuple):
-        time_diff_range = [d for d in cfg['total_dists'] if min_time_diff <= d <= max_time_diff]
-    else:
-        time_diff_range = range(min_time_diff, max_time_diff)
+    time_diff_range = range(min_time_diff, max_time_diff)
 
     time_diff: int = random.choice(time_diff_range)
     if use_fractional_t:
@@ -426,7 +425,7 @@ def uniform_frame_sampling(cfg: Dict, total_video_len: int, use_fractional_t: bo
     else:
         const_max_dist = cfg.get("max_dist", float("inf"))
         max_dist_start = cfg.get("max_dist_start", const_max_dist)
-        max_dist_scale = cfg.get("max_dist_end", const_max_dist)
+        max_dist_end = cfg.get("max_dist_end", const_max_dist)
         max_dist = max_dist_start + (max_dist_end - max_dist_start) * (cur_nimg / total_nimg)
         max_dist = min(max_dist, total_video_len // cfg['num_frames_per_video'])
         d = random.randint(1, int(max_dist))

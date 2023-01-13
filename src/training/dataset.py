@@ -276,6 +276,7 @@ class VideoFramesFolderDataset(Dataset):
         self.load_n_consecutive_random_offset = load_n_consecutive_random_offset
         self.subsample_factor = subsample_factor
         self.discard_short_videos = discard_short_videos
+        self.cur_nimg, self.total_nimg = 0, 1
 
         if self.subsample_factor > 1 and self.load_n_consecutive is None:
             raise NotImplementedError("Can do subsampling only when loading consecutive frames.")
@@ -331,6 +332,10 @@ class VideoFramesFolderDataset(Dataset):
         raw_shape = [len(self._video_idx2frames)] + list(self._load_raw_frames(0, [0])[0][0].shape)
 
         super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
+
+    def update_nimg(self, cur_nimg, total_nimg):
+        self.cur_nimg = cur_nimg
+        self.total_nimg = total_nimg
 
     def _get_zipfile(self):
         assert self._type == 'zip'
@@ -438,7 +443,7 @@ class VideoFramesFolderDataset(Dataset):
             assert not self.sampling_dict is None, f"The dataset was created without `cfg.sampling` config and cannot sample frames on its own."
             if total_len > self.max_num_frames:
                 offset = random.randint(0, total_len - self.max_num_frames)
-            frames_idx = sample_frames(self.sampling_dict, total_video_len=min(total_len, self.max_num_frames)) + offset
+            frames_idx = sample_frames(self.sampling_dict, total_video_len=min(total_len, self.max_num_frames), cur_nimg=self.cur_nimg, total_nimg=self.total_nimg) + offset
         else:
             frames_idx = np.array(frames_idx)
 
