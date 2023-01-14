@@ -389,11 +389,10 @@ def random_frame_sampling(cfg: Dict, total_video_len: int, use_fractional_t: boo
     max_dist_start = cfg.get("max_dist_start", const_max_dist)
     max_dist_end = cfg.get("max_dist_end", const_max_dist)
     max_dist = max_dist_start + (max_dist_end - max_dist_start) * (cur_nimg / total_nimg)
-    breakpoint()
 
     min_time_diff = cfg["num_frames_per_video"] - 1
     max_time_diff = int(min(total_video_len - 1, max_dist))
-    max_time_diff = max(min_time_diff, max_time_diff)
+    max_time_diff = max(min_time_diff + 1, max_time_diff)
 
     time_diff_range = range(min_time_diff, max_time_diff)
 
