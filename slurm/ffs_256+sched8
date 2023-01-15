@@ -36,5 +36,5 @@ python3 src/infra/launch.py \
   num_gpus=4 \
   sampling.num_frames_per_video=8 \
   training.batch_size=16 \
-  +sampling.max_dist_start=1 \
-  +sampling.max_dist_end=128
+  +sampling.max_dist_start=4 \
+  +sampling.max_dist_end=256
