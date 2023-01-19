@@ -90,46 +90,6 @@ def modulated_conv2d(
 #----------------------------------------------------------------------------
 
 @persistence.persistent_class
-class TemporalShiftModule(torch.nn.Module):
-    def __init__(self,
-        past_channels: Optional[int] = None,    # Number of channels to take from previous frame
-        future_channels: Optional[int] = None,  # Number of channels to take from a future frame
-    ):
-        super().__init__()
-        self.past_channels = past_channels
-        self.future_channels = future_channels
-    
-    def forward(self, x: torch.Tensor, num_frames: int) -> torch.Tensor:
-        """Process input tensor with TSM.
-        :param x: Tensor of shape (N*T, ...) where N is the batch size and T is the number of frames.
-        :return x: Processed `x`.
-        """
-        
-        orig_shape = x.shape
-        batch_size = len(x) // num_frames
-        x = x.view(batch_size, num_frames, *x.shape[1:])
-
-        num_channels = x.shape[2]
-
-        past = self.past_channels
-        if past is None:
-            past = num_channels // 8
-        
-        fut = self.future_channels
-        if fut is None:
-            fut = num_channels // 8
-
-        y = torch.zeros_like(x)
-        y[:, 1:, :past] = x[:, :-1, :past]
-        y[:, :, past:-fut] = x[:, :, past:-fut]
-        y[:, :-1, -fut:] = x[:, 1:, -fut:]
-        y = y.view(orig_shape)
-
-        return y
-
-#----------------------------------------------------------------------------
-
-@persistence.persistent_class
 class SynthesisLayer(torch.nn.Module):
     def __init__(self,
         in_channels,                    # Number of input channels.
@@ -163,8 +123,6 @@ class SynthesisLayer(torch.nn.Module):
             self.noise_strength = torch.nn.Parameter(torch.zeros([]))
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
 
-        self.tsm = TemporalShiftModule()
-
     def forward(self, x, w, num_frames, noise_mode='random', fused_modconv=True, gain=1):
         assert noise_mode in ['random', 'const', 'none']
         in_resolution = self.resolution // self.up
@@ -178,7 +136,6 @@ class SynthesisLayer(torch.nn.Module):
             noise = self.noise_const * self.noise_strength
 
         flip_weight = (self.up == 1) # slightly faster
-        x = self.tsm(x, num_frames)
         x = modulated_conv2d(x=x, weight=self.weight, styles=styles, noise=noise, up=self.up,
             padding=self.padding, resample_filter=self.resample_filter, flip_weight=flip_weight,
             fused_modconv=fused_modconv)
