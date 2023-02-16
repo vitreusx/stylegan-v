@@ -1,0 +1,11 @@
+# Load modules
+module purge 2>&1 >/dev/null
+module load \
+  gpu/cuda/11.7 \
+  common/git/2.27.0 \
+  common/anaconda/3.8 \
+  common/compilers/nvidia/21.2 \
+  common/compilers/gcc/9.3.1
+
+# Load Python env
+. activate ./env
