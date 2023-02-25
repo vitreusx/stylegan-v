@@ -1,0 +1,35 @@
+#!/bin/bash -l
+#SBATCH -A g92-1496
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --job-name=ffs_256_cotrain
+#SBATCH --time=48:00:00
+#SBATCH --gres=gpu:volta:4
+#SBATCH --constraint=volta32G
+
+# Load modules
+module purge 2>&1 >/dev/null
+module load \
+  gpu/cuda/11.7 \
+  common/git/2.27.0 \
+  common/anaconda/3.8 \
+  common/compilers/nvidia/21.2 \
+  common/compilers/gcc/9.3.1
+
+# Load Python env
+. activate ./env
+
+# Run training
+CC=gcc CXX=g++ \
+WANDB_ENTITY=video_uw2022 \
+WANDB_PROJECT=cotrain \
+python3 src/infra/launch.py \
+  hydra.run.dir=$(pwd) \
+  exp_suffix=ffs_256_cotrain \
+  env=local \
+  dataset=ffs_x_ffhq \
+  dataset.name=ffs_x_ffhq \
+  dataset.resolution=256 \
+  +overwrite=true \
+  +training.resume=latest \
+  num_gpus=4
