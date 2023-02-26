@@ -19,6 +19,7 @@ import tempfile
 import torch
 import gc
 from omegaconf import OmegaConf, DictConfig
+import sys
 
 from src import dnnlib
 from training import training_loop
@@ -369,7 +370,8 @@ def subprocess_fn(rank, args, temp_dir):
     sync_device = torch.device('cuda', rank) if args.num_gpus > 1 else None
     training_stats.init_multiprocessing(rank=rank, sync_device=sync_device)
     if rank != 0:
-        custom_ops.verbosity = 'none'
+        custom_ops.verbosity = 'none' 
+        sys.stdout = open(os.devnull, "w")
 
     # Execute training loop.
     training_loop.training_loop(rank=rank, **args)
