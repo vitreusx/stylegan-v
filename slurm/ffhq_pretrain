@@ -35,4 +35,5 @@ python3 src/infra/launch.py \
   +training.resume=latest \
   training.kimg=5000 \
   training.snap=100 \
-  num_gpus=4
+  num_gpus=4 \
+  training.metrics="['fid50k_full']"
