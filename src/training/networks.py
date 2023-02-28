@@ -319,6 +319,10 @@ class SynthesisNetwork(torch.nn.Module):
                 **block_kwargs)
             self.num_ws += block.num_conv
 
+            frozen = (idx >= len(self.block_resolutions) - self.freeze_blocks)
+            if frozen:
+                block.requires_grad_(False)
+
             if is_last:
                 self.num_ws += block.num_torgb
             setattr(self, f'b{res}', block)
@@ -363,12 +367,7 @@ class SynthesisNetwork(torch.nn.Module):
             block = getattr(self, f'b{res}')
             if self.cfg.time_enc.cond_type != 'concat_const':
                 motion_v = None # To make sure that we do not leak.
-            frozen = (idx >= len(self.block_resolutions) - self.freeze_blocks)
-            if frozen:
-                with torch.no_grad():
-                    x, img = block(x, img, cur_ws, motion_v=motion_v, **block_kwargs)
-            else:
-                x, img = block(x, img, cur_ws, motion_v=motion_v, **block_kwargs)
+            x, img = block(x, img, cur_ws, motion_v=motion_v, **block_kwargs)
 
         return img
 
