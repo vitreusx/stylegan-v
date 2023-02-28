@@ -26,7 +26,8 @@ target: 0.6 # ADA target value for --aug=ada
 augpipe: bgc # Augmentation pipeline [default: bgc]
 
 # Transfer learning.
-freezed: 0 # Freeze-D [default: 0 layers]
+freezed: 0 # Freeze-D [default: first 0 layers]
+freezeg: 0 # Freeze-G [default: last 0 *blocks*]
 
 # Performance options.
 fp32: false # Disable mixed-precision training

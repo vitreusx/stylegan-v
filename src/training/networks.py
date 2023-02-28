@@ -276,6 +276,7 @@ class SynthesisNetwork(torch.nn.Module):
         channel_base    = 32768,    # Overall multiplier for the number of channels.
         channel_max     = 512,      # Maximum number of channels in any layer.
         num_fp16_res    = 0,        # Use FP16 for the N highest resolutions.
+        freeze_blocks   = 0,        # Number of blocks to freeze.
         cfg             = {},       # Additional config
         **block_kwargs,             # Arguments for SynthesisBlock.
     ):
@@ -290,6 +291,7 @@ class SynthesisNetwork(torch.nn.Module):
         self.block_resolutions = [2 ** i for i in range(2, self.img_resolution_log2 + 1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
         fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
+        self.freeze_blocks = freeze_blocks
 
         if self.cfg.motion.v_dim > 0:
             self.motion_encoder = MotionMappingNetwork(self.cfg)
@@ -299,7 +301,7 @@ class SynthesisNetwork(torch.nn.Module):
             self.motion_v_dim = 0
 
         self.num_ws = 0
-        for res in self.block_resolutions:
+        for idx, res in enumerate(self.block_resolutions):
             in_channels = channels_dict[res // 2] if res > 4 else 0
             out_channels = channels_dict[res]
             use_fp16 = (res >= fp16_resolution)
@@ -357,11 +359,16 @@ class SynthesisNetwork(torch.nn.Module):
                 w_idx += block.num_conv
 
         x = img = None
-        for res, cur_ws in zip(self.block_resolutions, block_ws):
+        for idx, (res, cur_ws) in enumerate(zip(self.block_resolutions, block_ws)):
             block = getattr(self, f'b{res}')
             if self.cfg.time_enc.cond_type != 'concat_const':
                 motion_v = None # To make sure that we do not leak.
-            x, img = block(x, img, cur_ws, motion_v=motion_v, **block_kwargs)
+            frozen = (idx >= len(self.block_resolutions) - self.freeze_blocks)
+            if frozen:
+                with torch.no_grad():
+                    x, img = block(x, img, cur_ws, motion_v=motion_v, **block_kwargs)
+            else:
+                x, img = block(x, img, cur_ws, motion_v=motion_v, **block_kwargs)
 
         return img
 
@@ -374,6 +381,7 @@ class Generator(torch.nn.Module):
         w_dim,                      # Intermediate latent (W) dimensionality.
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
+        freeze_blocks       = 0,    # Number of synthesis blocks to freeze.        
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
         synthesis_kwargs    = {},   # Arguments for SynthesisNetwork.
         cfg                 = {},   # Config
@@ -387,7 +395,7 @@ class Generator(torch.nn.Module):
         self.w_dim = w_dim
         self.img_resolution = img_resolution
         self.img_channels = img_channels
-        self.synthesis = SynthesisNetwork(w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels, cfg=cfg, **synthesis_kwargs)
+        self.synthesis = SynthesisNetwork(w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels, freeze_blocks=freeze_blocks, cfg=cfg, **synthesis_kwargs)
         self.num_ws = self.synthesis.num_ws
         self.mapping = MappingNetwork(z_dim=self.z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.num_ws, **mapping_kwargs)
 
@@ -640,6 +648,8 @@ class Discriminator(torch.nn.Module):
         if self.c_dim > 0 or not self.time_encoder is None:
             self.mapping = MappingNetwork(z_dim=0, c_dim=total_c_dim, w_dim=cmap_dim, num_ws=None, w_avg_beta=None, **mapping_kwargs)
         self.b4 = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, cfg=self.cfg, **epilogue_kwargs, **common_kwargs)
+
+        self._num_layers = cur_layer_idx
 
     def forward(self, img, c, t, **block_kwargs):
         assert len(img) == t.shape[0] * t.shape[1], f"Wrong shape: {img.shape}, {t.shape}"

@@ -323,6 +323,13 @@ def process_hyperparams(cfg: DictConfig):
             raise UserError('--freezed must be non-negative')
         desc += f'-freezed{c.freezed:d}'
         args.D_kwargs.block_kwargs.freeze_layers = c.freezed
+    
+    if c.freezeg is not None:
+        assert isinstance(c.freezeg, int)
+        if not c.freezeg >= 0:
+            raise UserError("--freezeg most be non-negative")
+        desc += f"-freezeg{c.freezeg:d}"
+        args.G_kwargs.freeze_blocks = c.freezeg
 
     # -------------------------------------------------
     # Performance options: fp32, nhwc, nobench, workers
