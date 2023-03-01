@@ -32,7 +32,7 @@ python3 src/infra/launch.py \
   dataset.name=ffs_processed \
   dataset.resolution=256 \
   +overwrite=true \
-  +training.resume="$(pwd)/ckpts/ffhq_pretrain.pkl" \
+  +training.resume=latest \
   training.kimg=20000 \
   training.snap=100 \
   training.freezed=8 \
