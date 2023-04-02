@@ -17,6 +17,7 @@ import psutil
 import PIL.Image
 import numpy as np
 import torch
+import math
 from torch.utils.tensorboard import SummaryWriter # Note: importing torchvision BEFORE tensorboard results in SIGSEGV
 import torchvision
 from src import dnnlib
@@ -153,6 +154,7 @@ def training_loop(
         print('Loading training set...')
     training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs) # subclass of training.dataset.Dataset
     training_set_sampler = misc.InfiniteSampler(dataset=training_set, rank=rank, num_replicas=num_gpus, seed=random_seed)
+
     training_set_iterator = iter(torch.utils.data.DataLoader(dataset=training_set, sampler=training_set_sampler, batch_size=batch_size//num_gpus, **data_loader_kwargs))
     if rank == 0:
         print('Num videos: ', len(training_set))
@@ -210,7 +212,12 @@ def training_loop(
         print('printing module summary for G')
         img = misc.print_module_summary(G, [z, c, t]) # [bf, c, h, w]
         print('printing module summary for D')
-        misc.print_module_summary(D, [img, c, t])
+        while True:
+            is_video = (torch.rand(batch_gpu, device=device) > 0.5)
+            num_videos = is_video.sum().item()
+            if 0 < num_videos < batch_gpu and num_videos % 4 == 0:
+                break
+        misc.print_module_summary(D, [img, c, t, is_video])
 
     # Setup augmentation.
     if rank == 0:
@@ -355,15 +362,56 @@ def training_loop(
     # Convert to bool since hydra has a very slow access time...
     use_fractional_t_for_G = bool(cfg.model.generator.motion.use_fractional_t)
 
+    assert batch_size % num_gpus == 0
+    true_batch_size = batch_size // num_gpus
+    assert true_batch_size % batch_gpu == 0
+    num_splits = true_batch_size // batch_gpu
+    req_div = 4 * num_splits
+
     while True:
         # Fetch training data.
-        with torch.autograd.profiler.record_function('data_fetch'):
-            batch = next(training_set_iterator)
+        with torch.autograd.profiler.record_function('data_fetch'):            
+            req_num_videos = req_div * random.randint(1, true_batch_size // req_div - 1)
+            req_num_images = true_batch_size - req_num_videos
+
+            cur_batch = None
+            num_videos, num_images, total = 0, 0, 0
+            while True:
+                batch = next(training_set_iterator)
+                
+                if cur_batch is None:
+                    cur_batch = batch
+                else:
+                    cur_batch = {k: torch.cat([cur_batch[k], batch[k]]) for k in batch.keys()}
+                
+                cur_num_videos = batch["is_video"].sum().item()
+                total += true_batch_size
+                num_videos += cur_num_videos
+                num_images += true_batch_size - cur_num_videos
+
+                if num_videos >= req_num_videos and num_images >= req_num_images:
+                    video_idxes, = cur_batch["is_video"].nonzero(as_tuple=True)
+                    video_idxes = video_idxes[:req_num_videos]
+                    video_idxes = video_idxes.reshape(num_splits, -1)
+
+                    image_idxes, = torch.logical_not(cur_batch["is_video"]).nonzero(as_tuple=True)
+                    image_idxes = image_idxes[:req_num_images]
+                    image_idxes = image_idxes.reshape(num_splits, -1)
+
+                    all_idxes = torch.cat([video_idxes, image_idxes], dim=1)
+                    all_idxes = all_idxes[:,torch.randperm(all_idxes.shape[1])]
+                    all_idxes = all_idxes.reshape(-1)
+
+                    cur_batch = {k: cur_batch[k][all_idxes] for k in cur_batch.keys()}
+                    batch = cur_batch
+                    break
+                    
             # print('---------------------Next batch!-----------------------')
             phase_real_img, phase_real_c, phase_real_t, phase_real_l = batch['image'], batch['label'], batch['times'], batch['video_len']
             phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
             phase_real_c = phase_real_c.to(device).split(batch_gpu) # [batch_gpu, batch_size, c_dim]
             phase_real_t = phase_real_t.to(device).split(batch_gpu) # [batch_gpu, batch_size, c_dim]
+            phase_real_is_video = batch["is_video"].to(device).split(batch_gpu)
             all_gen_z = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
             all_gen_z = [phase_gen_z.split(batch_gpu) for phase_gen_z in all_gen_z.split(batch_size)]
 
@@ -390,8 +438,8 @@ def training_loop(
             phase.module.train()
 
             # Accumulate gradients over multiple rounds.
-            curr_data = zip(phase_real_img, phase_real_c, phase_real_t, phase_gen_z, phase_gen_c, phase_gen_t)
-            for round_idx, (real_img, real_c, real_t, gen_z, gen_c, gen_t) in enumerate(curr_data):
+            curr_data = zip(phase_real_img, phase_real_c, phase_real_t, phase_real_is_video, phase_gen_z, phase_gen_c, phase_gen_t)
+            for round_idx, (real_img, real_c, real_t, real_is_video, gen_z, gen_c, gen_t) in enumerate(curr_data):
                 sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
                 gain = phase.interval
 
@@ -400,6 +448,7 @@ def training_loop(
                     real_img=real_img,
                     real_c=real_c,
                     real_t=real_t,
+                    real_is_video=real_is_video,
                     gen_z=gen_z,
                     gen_c=gen_c,
                     gen_t=gen_t,

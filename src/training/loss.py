@@ -53,7 +53,7 @@ class StyleGAN2Loss(Loss):
             out = self.G_synthesis(ws, t=t, c=c)
         return out, ws
 
-    def run_D(self, img, c, t, sync):
+    def run_D(self, img, c, t, is_video, sync):
         if self.augment_pipe is not None:
             if self.cfg.model.loss_kwargs.get('video_consistent_aug', False):
                 nf, ch, h, w = img.shape
@@ -67,11 +67,11 @@ class StyleGAN2Loss(Loss):
                 img = img.view(n * f, ch, h, w) # [n * f, ch, h, w]
 
         with misc.ddp_sync(self.D, sync):
-            outputs = self.D(img, c, t)
+            outputs = self.D(img, c, t, is_video)
 
         return outputs
 
-    def accumulate_gradients(self, phase, real_img, real_c, real_t, gen_z, gen_c, gen_t, sync, gain):
+    def accumulate_gradients(self, phase, real_img, real_c, real_t, real_is_video, gen_z, gen_c, gen_t, sync, gain):
         assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']
         do_Gmain        = (phase in ['Gmain', 'Gboth'])
         do_Dmain        = (phase in ['Dmain', 'Dboth'])
@@ -84,7 +84,8 @@ class StyleGAN2Loss(Loss):
         if do_Gmain:
             with torch.autograd.profiler.record_function('Gmain_forward'):
                 gen_img, _gen_ws = self.run_G(gen_z, gen_c, gen_t, sync=(sync and not do_Gpl)) # [batch_size * num_frames, c, h, w]
-                D_out_gen = self.run_D(gen_img, gen_c, gen_t, sync=False) # [batch_size]
+                gen_is_video = torch.ones((len(gen_t),), dtype=torch.bool, device=gen_img.device)
+                D_out_gen = self.run_D(gen_img, gen_c, gen_t, gen_is_video, sync=False) # [batch_size]
                 training_stats.report('Loss/scores/fake', D_out_gen['image_logits'])
                 training_stats.report('Loss/signs/fake', D_out_gen['image_logits'].sign())
                 loss_Gmain = F.softplus(-D_out_gen['image_logits']) # -log(sigmoid(y))
@@ -122,7 +123,8 @@ class StyleGAN2Loss(Loss):
             with torch.autograd.profiler.record_function('Dgen_forward'):
                 with torch.no_grad():
                     gen_img, _gen_ws = self.run_G(gen_z, gen_c, gen_t, sync=False) # [batch_size * num_frames, c, h, w]
-                D_out_gen = self.run_D(gen_img, gen_c, gen_t, sync=False) # Gets synced by loss_Dreal.
+                gen_is_video = torch.ones((len(gen_t),), dtype=torch.bool, device=gen_img.device)
+                D_out_gen = self.run_D(gen_img, gen_c, gen_t, gen_is_video, sync=False) # Gets synced by loss_Dreal.
                 training_stats.report('Loss/scores/fake', D_out_gen['image_logits'])
                 training_stats.report('Loss/signs/fake', D_out_gen['image_logits'].sign())
                 loss_Dgen = F.softplus(D_out_gen['image_logits']) # -log(1 - sigmoid(y))
@@ -142,7 +144,7 @@ class StyleGAN2Loss(Loss):
             name = 'Dreal_Dr1' if do_Dmain and do_Dr1 else 'Dreal' if do_Dmain else 'Dr1'
             with torch.autograd.profiler.record_function(name + '_forward'):
                 real_img_tmp = real_img.detach().requires_grad_(do_Dr1)
-                D_out_real = self.run_D(real_img_tmp, real_c, real_t, sync=sync)
+                D_out_real = self.run_D(real_img_tmp, real_c, real_t, real_is_video, sync=sync)
                 training_stats.report('Loss/scores/real', D_out_real['image_logits'])
                 training_stats.report('Loss/signs/real', D_out_real['image_logits'].sign())
 

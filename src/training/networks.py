@@ -621,17 +621,27 @@ class Discriminator(torch.nn.Module):
         total_c_dim = c_dim + (0 if self.time_encoder is None else self.time_encoder.get_dim())
         cur_layer_idx = 0
 
+        after_concat = False
         for res in self.block_resolutions:
             in_channels = channels_dict[res] if res < img_resolution else 0
             tmp_channels = channels_dict[res]
             out_channels = channels_dict[res // 2]
 
+            use_fp16 = (res >= fp16_resolution)
+            if res == self.cfg.concat_res:
+                after_concat = True
+                in_channels = in_channels // self.cfg.num_frames_div_factor
+
+            if after_concat:
+                block = DiscriminatorBlock(in_channels, tmp_channels, out_channels, resolution=res,
+                first_layer_idx=cur_layer_idx, use_fp16=use_fp16, cfg=self.cfg, **block_kwargs, **common_kwargs)
+                setattr(self, f"b{res}_img", block)
+            
             if res // 2 == self.cfg.concat_res:
                 out_channels = out_channels // self.cfg.num_frames_div_factor
             if res == self.cfg.concat_res:
-                in_channels = (in_channels // self.cfg.num_frames_div_factor) * self.cfg.sampling.num_frames_per_video
+                in_channels = in_channels * self.cfg.sampling.num_frames_per_video
 
-            use_fp16 = (res >= fp16_resolution)
             block = DiscriminatorBlock(in_channels, tmp_channels, out_channels, resolution=res,
                 first_layer_idx=cur_layer_idx, use_fp16=use_fp16, cfg=self.cfg, **block_kwargs, **common_kwargs)
             setattr(self, f'b{res}', block)
@@ -641,9 +651,15 @@ class Discriminator(torch.nn.Module):
             self.mapping = MappingNetwork(z_dim=0, c_dim=total_c_dim, w_dim=cmap_dim, num_ws=None, w_avg_beta=None, **mapping_kwargs)
         self.b4 = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, cfg=self.cfg, **epilogue_kwargs, **common_kwargs)
 
-    def forward(self, img, c, t, **block_kwargs):
+        self.b4_img = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, cfg=self.cfg, **epilogue_kwargs, **common_kwargs)
+
+    def forward(self, img, c, t, is_video, **block_kwargs):
         assert len(img) == t.shape[0] * t.shape[1], f"Wrong shape: {img.shape}, {t.shape}"
         assert t.ndim == 2, f"Wrong shape: {t.shape}"
+
+        is_image = torch.logical_not(is_video)
+        is_video_rep = is_video.repeat_interleave(self.cfg.sampling.num_frames_per_video)
+        is_image_rep = torch.logical_not(is_video_rep)
 
         if not self.time_encoder is None:
             # Encoding the time distances
@@ -653,23 +669,49 @@ class Discriminator(torch.nn.Module):
             c = torch.cat([c, t_embs], dim=1) # [batch_size, c_dim + t_dim]
             c = (c * 0.0) if self.cfg.dummy_c else c # [batch_size, c_dim + t_dim]
 
-        x = None
+        x, img_x = None, None
         for res in self.block_resolutions:
             block = getattr(self, f'b{res}')
             if res == self.cfg.concat_res:
                 # Concatenating the frames
-                x = x.view(-1, self.cfg.sampling.num_frames_per_video, *x.shape[1:]) # [batch_size, num_frames, c, h, w]
-                x = x.view(x.shape[0], -1, *x.shape[3:]) # [batch_size, num_frames * c, h, w]
-            x, img = block(x, img, **block_kwargs)
+                vid_x, img_x = x[is_video_rep], x[is_image_rep]
+                img_x = img_x[::self.cfg.sampling.num_frames_per_video]
+                if img is not None:
+                    vid_img, img_ = img[is_video_rep], img[is_image_rep]
+                    img_ = img_[::self.cfg.sampling.num_frames_per_video]
+                else:
+                    vid_img, img_ = None, None
+                x, img = vid_x, vid_img
 
-        cmap = None
+                x = x.view(-1, self.cfg.sampling.num_frames_per_video, *x.shape[1:]) # [batch_size, num_frames, c, h, w]
+                x = x.view(x.shape[0], x.shape[1] * x.shape[2], *x.shape[3:]) # [batch_size, num_frames * c, h, w]
+            
+            if x is None or len(x) > 0:
+                x, img = block(x, img, **block_kwargs)
+
+            if img_x is not None and len(img_x) > 0:
+                block = getattr(self, f"b{res}_img")
+                img_x, img_ = block(img_x, img_, **block_kwargs)
+
+        cmap, vid_cmap, img_cmap = None, None, None
         if self.c_dim > 0 or not self.time_encoder is None:
             assert c.shape[1] > 0
         if c.shape[1] > 0:
             cmap = self.mapping(None, c)
-        x = self.b4(x, img, cmap)
-        x = x.squeeze(1) # [batch_size]
+            vid_cmap, img_cmap = cmap[is_video], cmap[is_image]
+        
+        if len(x) > 0 and len(img_x) > 0:
+            vid_x = self.b4(x, img, vid_cmap).squeeze(1) # [batch_size]
+            img_x = self.b4_img(img_x, img_, img_cmap).squeeze(1)
 
+            x = torch.zeros(is_video.shape, dtype=vid_x.dtype, device=vid_x.device)
+            x[is_video] = vid_x
+            x[is_image] = img_x
+        elif len(x) > 0:
+            x = self.b4(x, img, vid_cmap).squeeze(1)
+        else:
+            x = self.b4_img(img_x, img_, img_cmap).squeeze(1)
+        
         return {'image_logits': x}
 
 #----------------------------------------------------------------------------
