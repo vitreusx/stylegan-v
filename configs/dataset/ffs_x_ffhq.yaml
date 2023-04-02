@@ -1,0 +1,5 @@
+# @package _group_
+
+name: ffs_${dataset.resolution}_unstable
+fps: 30
+image_path: data/ffhq

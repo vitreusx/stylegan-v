@@ -1,0 +1,32 @@
+#!/usr/bin/bash -l
+#SBATCH -p plgrid-gpu-a100 
+#SBATCH -A plgso2023-gpu-a100 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=24:00:00
+#SBATCH --gres=gpu:4
+#SBATCH --job-name=cross
+
+conda activate ./env
+
+EXP_NAME="cross"
+
+# Run training
+CC=x86_64-conda_cos6-linux-gnu-gcc \
+CXX=x86_64-conda_cos6-linux-gnu-g++ \
+WANDB_ENTITY=video_uw2022 \
+WANDB_PROJECT=${EXP_NAME} \
+python3 src/infra/launch.py \
+  hydra.run.dir=. \
+  exp_suffix=${EXP_NAME} \
+  env=local \
+  dataset=ffs_x_ffhq \
+  dataset.name=ffs_processed \
+  dataset.resolution=256 \
+  +ignore_uncommited_changes=true \
+  +overwrite=true \
+  training.kimg=10000 \
+  training.batch_size=64 \
+  training.metrics='["fvd2048_16f"]' \
+  num_gpus=4

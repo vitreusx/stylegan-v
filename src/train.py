@@ -89,8 +89,8 @@ def process_hyperparams(cfg: DictConfig):
     assert cfg.model.loss_kwargs.style_mixing_prob == 0, "Not supported"
 
     args.training_set_kwargs = dnnlib.EasyDict(
-        class_name='training.dataset.VideoFramesFolderDataset',
-        path=c.data, cfg=cfg.dataset, use_labels=True, max_size=None, xflip=False)
+        class_name=cfg.dataset.class_name, path=cfg.dataset.path,
+        cfg=cfg.dataset, use_labels=True, max_size=None, xflip=False)
 
     # args.training_set_kwargs = dnnlib.EasyDict(
     #     class_name='training.dataset.ImageFolderDataset',

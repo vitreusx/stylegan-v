@@ -1,4 +1,3 @@
-name: stylegan-v
 channels:
   - pytorch
   - defaults

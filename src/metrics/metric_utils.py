@@ -242,6 +242,7 @@ def compute_feature_stats_for_dataset(
 
         if images.shape[1] == 1:
             images = images.repeat([1, 3, *([1] * (images.ndim - 2))])
+
         features = detector(images.to(opts.device), **detector_kwargs)
         stats.append_torch(features, num_gpus=opts.num_gpus, rank=opts.rank)
         progress.update(stats.num_items)

@@ -1,9 +1,11 @@
 # @package _group_
 
 path: data/${dataset.name}
+video_ratio: 0.8
 sampling: ${sampling}
 c_dim: 0
 max_num_frames: 1024
+class_name: training.dataset.JointDataset
 
 # Default parameters
 fps: 25
@@ -12,3 +14,4 @@ resolution: 256
 # When used with slurm, this will take the dataset from `path_for_slurm_job`
 # and will copy it into the `path` location
 path_for_slurm_job: ${env.datasets_dir}/${dataset.name}
+

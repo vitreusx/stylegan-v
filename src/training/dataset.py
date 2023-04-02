@@ -13,7 +13,7 @@ import zipfile
 import json
 import random
 from typing import Tuple
-
+from pathlib import Path
 import numpy as np
 import PIL.Image
 import torch
@@ -180,6 +180,7 @@ class ImageFolderDataset(Dataset):
         self._path = path
         self._zipfile = None
 
+        self._image_dir = False
         if os.path.isdir(self._path):
             self._type = 'dir'
             self._all_fnames = {os.path.relpath(os.path.join(root, fname), start=self._path) for root, _dirs, files in os.walk(self._path, followlinks=True) for fname in files}
@@ -282,7 +283,7 @@ class VideoFramesFolderDataset(Dataset):
 
         listdir_full_paths = lambda d: sorted([os.path.join(d, x) for x in os.listdir(d)])
         name = os.path.splitext(os.path.basename(self._path))[0]
-
+        
         if os.path.isdir(self._path):
             self._type = 'dir'
             # We assume that the depth is 2
@@ -450,6 +451,64 @@ class VideoFramesFolderDataset(Dataset):
 
     def compute_max_num_frames(self) -> int:
         return max(len(frames) for frames in self._video_idx2frames)
+
+#----------------------------------------------------------------------------
+
+class JointDataset(Dataset):
+    def __init__(self,
+        cfg: DictConfig,                                # Config
+        path: str,
+        resolution=None,                                # Unused arg for backward compatibility
+        load_n_consecutive: int=None,                   # Should we load first N frames for each video?
+        load_n_consecutive_random_offset: bool=True,    # Should we use a random offset when loading consecutive frames?
+        subsample_factor: int=1,                        # Sampling factor, i.e. decreasing the temporal resolution
+        discard_short_videos: bool=False,               # Should we discard videos that are shorter than `load_n_consecutive`?
+        **super_kwargs,                                 # Additional arguments for the Dataset base class.
+    ):
+        # breakpoint()
+        self.video_ds = VideoFramesFolderDataset(cfg.path, cfg, resolution, load_n_consecutive, load_n_consecutive_random_offset, subsample_factor, discard_short_videos, **super_kwargs)
+
+        self.image_ds = ImageFolderDataset(cfg.image_path, **super_kwargs)
+
+        self._video_len = len(self.video_ds)
+        self._total_len = int(self._video_len / cfg.video_ratio)
+        self._image_len = self._total_len - self._video_len
+        self._image_idxes = torch.randint(len(self.image_ds), (self._image_len,))
+
+        raw_shape = (self._total_len, *self.video_ds._raw_shape[1:])
+        super().__init__(self.video_ds.name, raw_shape, **super_kwargs)
+    
+    def __getitem__(self, idx):
+        if idx < self._video_len:
+            item = self.video_ds[idx]
+            return {**item, "is_video": True}
+        else:
+            image_idx = self._image_idxes[idx - self._video_len]
+            item = self.image_ds[image_idx]
+            if self.video_ds.load_n_consecutive:
+                random_offset = random.randint(0, self.video_ds.max_num_frames - self.video_ds.load_n_consecutive)
+                times = torch.arange(random_offset, random_offset + self.video_ds.load_n_consecutive)
+            else:
+                times = sample_frames(self.video_ds.sampling_dict, total_video_len=self.video_ds.max_num_frames)
+            video_len = self.video_ds.max_num_frames
+            image = np.stack([item["image"],] * len(times), axis=0)
+            label = item["label"]
+            return {"image": image, "label": label, "video_len": video_len, "times": times, "is_video": False}
+    
+    def _load_raw_labels(self): # to be overridden by subclass
+        video_labels = self.video_ds._load_raw_labels()
+        image_labels = self.image_ds._load_raw_labels()
+        if video_labels is None or image_labels is None:
+            return None
+        image_labels = image_labels[self._image_idxes]
+        return np.concatenate([video_labels, image_labels], axis=0)
+    
+    def get_video_len(self, idx: int) -> int:
+        if idx < self._video_len:
+            return self.video_ds.get_video_len(idx)
+        else:
+            return self.video_ds.max_num_frames
+
 
 #----------------------------------------------------------------------------
 
